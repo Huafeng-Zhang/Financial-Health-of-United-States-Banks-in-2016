@@ -1,0 +1,194 @@
+---
+title: "R Code & Output"
+author: "Huafeng Zhang"
+date: "4/21/2017"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+```
+
+## Data Manpulation
+```{r,message=FALSE,warning=FALSE}
+setwd("~/Desktop/BIGbanks")
+Banks16 <- read.csv("Banks16.csv", header = TRUE)
+Assets <- read.csv("Assets16.csv",header = TRUE)
+Banks16 <- left_join(Banks16, Assets, by = "cert")
+
+# Add latitude & longitude for the U.S. map later 
+library(zipcode)
+# citation("zipcode")
+library(dplyr)
+# citation("dplyr")
+data(zipcode)
+z2 <- zipcode %>%
+  mutate(zip = as.numeric(zip)) %>%
+  select(zip, lat = latitude, long = longitude)
+Banks16$zip<- as.numeric(Banks16$zip)
+Banks16_geo_comp <- left_join(Banks16, z2, by="zip")
+```
+
+## Removed Banks with Missing Values 
+
+```{r,message=FALSE,warning=FALSE}
+# 85 NAs
+sum(is.na(Banks16)) 
+Banks16_draft <- Banks16_geo_comp[complete.cases(Banks16_geo_comp), ]
+
+# Make the names of the five varables consitent with the terms I used in my paper
+names(Banks16_draft)[12:16] <- c("NIM","ROA","NCOL", "CCLR", "TRBCR") 
+
+# 48 banks was removed (5897-5849)
+nrow(Banks16)-nrow(Banks16_draft)   
+```
+
+## PCP for the Data Set that is Used to Cluster (try to find potential skewed banks) 
+```{r,message=FALSE,warning=FALSE}
+library(lattice)
+# citation("lattice")
+parallelplot(Banks16_draft[ ,12:16],scale = list(x = list(rot = 45)),horizontal = FALSE)
+```
+
+## Reasoning for Excluding the Four Banks (P.S. the values of the assets are all in thousands (000's))
+```{r,message=FALSE,warning=FALSE}
+# Summary of all banks' assets
+summary(Banks16_draft$asset_16) 
+
+# The four banks' assets
+TRBCR3 <- head(sort(Banks16_draft$TRBCR, decreasing = TRUE), 5)
+ROA1 <-  head(sort(Banks16_draft$ROA, decreasing = TRUE), 5)
+Bank4 <- filter(Banks16_draft, Banks16_draft$cert %in% c(27575,18923, 21761,33831))
+Assets16_Bank4 <- Bank4$asset_16
+Assets16_Bank4
+```
+
+## Removed the Skewed Banks 
+```{r,message=FALSE,warning=FALSE}
+Banks16_cont <- Banks16_draft[!Banks16_draft$cert %in% c(27575,18923, 21761,33831), ]
+```
+
+## Variable Summary for the Final Version Data Set 
+```{r,message=FALSE,warning=FALSE}
+library(knitr)
+Banks16_var <- Banks16_cont[ ,-c(1:11, 17:19)]
+colnames(Banks16_var) <- c("NIM","ROA","NCOL","CCLR", "TRBCR")
+Variable <- c("NIM","ROA", "NCOL", "CCLR", "TRBCR" )
+total<- rep(nrow(Banks16_cont),5) 
+n_NAs <- as.integer(c(10,9,48,9,9)) # From summary(Banks16_geo_comp)
+Size_withoutNAs< - as.integer(total-n_NAs)
+Mean_withNAs <- round(c(3.680,1.0312 ,0.16777,11.677,26.310),digits = 3)
+Mean_withoutNAs <- round(c(3.6983,0.9383,0.16767 ,11.274,18.840),digits = 3) # From summary(Banks16_var)
+SD1 <- sqrt(var(Banks16_var$NIM))
+SD2 <- sqrt(var(Banks16_var$ROA))
+SD3 <- sqrt(var(Banks16_var$NCOL))
+SD4 <- sqrt(var(Banks16_var$CCLR))
+SD5 <- sqrt(var(Banks16_var$TRBCR))
+SD_withoutNAs <- round(c(SD1,SD2,SD3,SD4,SD5),digits = 3)
+var_sum <- data.frame(Variable,Size_withoutNAs,n_NAs,Mean_withNAs,Mean_withoutNAs,SD_withoutNAs)
+knitr::kable(var_sum)
+```
+
+## Check Correlation between Variables
+```{r,message=FALSE,warning=FALSE}
+library(corrplot)
+# citation("corrplot")
+cor_banks <- cor(scale(Banks16_var[ ,1:5]))
+knitr::kable(cor_banks, caption = "Correlation Between Variables in the Study")
+corrplot(cor_banks,type = "lower") 
+```
+
+## Scale the Five Variables
+```{r,message=FALSE,warning=FALSE}
+scale_var <- scale(Banks16_var,center = TRUE, scale = TRUE)
+```
+
+## Find the Optimal NUmber of Clusters (the Elbow Method)
+```{r,message=FALSE,warning=FALSE}
+set.seed(66666)
+c_df <- data.frame()
+for (k in 1:20){
+    c_w <- kmeans(scale_var,centers = k,iter.max = 100)
+   c_df <- rbind(c_df,cbind(k,c_w$tot.withinss))
+  }
+names(c_df) <- c("Clutser","Total within SS")
+plot(c_df,type = "b",xlab ="Number of clusters",ylab ="Within groups sum of squares",pch = 20,cex = 2) 
+abline(v = 9,col = "blue")
+```
+
+## Run Clustering and Find the Cluster Summary
+```{r,message=FALSE,warning=FALSE}
+k9<- kmeans(scale_var,9)
+Banks16_cont$Cluster <- k9$cluster
+Cluster_means <- Banks16_cont %>%
+                group_by(Cluster) %>%
+                summarise(mean(NIM),mean(ROA),mean(NCOL),mean(CCLR),mean(TRBCR))
+Cluster_means$Size <- c(k9$size)
+knitr::kable(Cluster_means,caption = "Cluster Summary")
+```
+
+## PCP Sorted by Clusters
+```{r,message=FALSE,warning=FALSE}
+Banks16_var$Cluster <- k9$cluster
+parallelplot(Banks16_var,col = Banks16_cont$Cluster,lty = Banks16_cont$Cluster,scale = list(x = list(rot = 45)),horizontal = FALSE)
+```
+
+## Banks Failed in 2017
+```{r,message=FALSE,warning=FALSE}
+# Data manipulation 
+Failed <- read.csv("Failed.csv", header = TRUE)
+Failed$Closing.Date <- as.character(Failed$Closing.Date)
+Failed$Closing.Date <- as.character(Failed$Closing.Date)
+substrRight <- function(x,n){
+  substr(x, nchar(x)-n+1,nchar(x))
+}
+Failed$Year <- as.factor(substrRight(Failed$Closing.Date, 2))
+colnames(Failed)[4] <- "cert"
+fb <- select(Failed, cert, fYear = Year)
+Banks16_cont_f <- left_join(Banks16_cont,fb, by ="cert")
+
+# Find banks failed in 2017
+Banks16_cont_f17 <- subset(Banks16_cont_f, fYear == "17")
+View(Banks16_cont_f17[ ,-c(2:12)])
+
+# Separate the origin clustering data set by using Banks failed in 2017 or not
+Banks16_cont_Notf17 <- subset(Banks16_cont_f, fYear = NA)
+```
+
+## Visulize Banks in the U.S. Map
+```{r,message=FALSE,warning=FALSE}
+library(maps)
+library(plotly)
+# citation("maps")
+# citation("plotly")
+states <- map_data("state")
+Banks16_cont_Notf17$Cluster <- as.factor(Banks16_cont_Notf17$Cluster)
+Banks16_cont_f17$Cluster <- as.factor(Banks16_cont_f17$Cluster)
+map1 <- ggplot() + 
+  geom_polygon(data = states, aes(x = long, y = lat, fill = region, group = group), alpha = .1) +
+  geom_point(data = Banks16_cont_Notf17, aes(x = long, y = lat, color = Cluster)) +
+  geom_point(data = Banks16_cont_f17, aes(x = long, y = lat,size = 3)) +
+  geom_text(label = Banks16_cont_f$Cluster,hjust = 0, vjust = 0) + scale_color_manual(values = c("blue", "grey", "yellow", "red", "lightgreen", "green", "orange","purple","lightblue")) +
+  scale_size_continuous(name = "Failed in 2017") + 
+  guides(fill = FALSE) + 
+  theme_bw()
+map1
+# ggplotly(map1) 
+
+## In order to see the banks that failed in 2017 in a more clearer way
+Banks16_geo_cont_Notf17 <- filter(Banks16_cont_Notf17, long < -67 & long > -130  & lat>25 )
+map2 <- ggplot() + 
+  geom_polygon(data = states, aes(x=long, y=lat, fill=region, group=group), alpha=.1) +
+  geom_point(data = Banks16_geo_cont_Notf17, aes(x = long, y = lat, color = Cluster)) +
+  geom_point(data = Banks16_cont_f17, aes(x = long, y = lat,size = 3)) +
+  geom_text(label= Banks16_cont_f$Cluster,hjust = 0, vjust = 0)+
+  scale_color_manual(values=c("blue", "grey", "yellow", "red", "lightgreen", "green", "orange","purple","lightblue")) + scale_size_continuous(name = "Failed in 2017") + 
+  guides(fill=FALSE) + 
+  theme_bw()
+map2
+# ggplotly(map2)
+```
+
